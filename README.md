@@ -5,8 +5,6 @@
 * A **single** Dockerfile `RUN` command that installs all packages with pinned versions and architectures.
 * A **list** mode that prints each `package:arch=version` on its own line for use in scripts or documentation.
 
-The script was originally created by @ianmiell. GPT(full disclosure) and I have added some features
-
 ## Features
 
 * **Recursive dependency resolution** using `apt-cache depends --recurse`.
@@ -77,6 +75,10 @@ lsb-release:all=12.0-2
 5. Open a Pull Request
 
 Please ensure code style consistency and add tests for new behavior where applicable.
+
+## Acknowledgments
+
+This project was originally created by GitHub user [ianmiell](https://github.com/ianmiell).
 
 ## License
 
