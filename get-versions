@@ -1,21 +1,78 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -e
+# Usage function
+usage() {
+  cat <<EOF
+Usage:
+  $0 [--list] <package1> [package2 ...]
 
-for c in apt-get apt-cache
-do
-	if [ $(which $c | wc -c) = 0 ]
-	then
-		echo "Could not find ${c} command on path. Is this a debian-based distro?"
-		exit 1
-	fi
+Options:
+  --list    Output each package:arch=version on its own line (no Dockerfile syntax).
+           Without --list, emits a single Dockerfile RUN command.
+EOF
+  exit 1
+}
+
+# Check for --list flag
+LIST_MODE=false
+if [[ "${1:-}" == "--list" ]]; then
+  LIST_MODE=true
+  shift
+fi
+
+# Ensure at least one package is provided
+if [ $# -lt 1 ]; then
+  usage
+fi
+
+# Sanity checks for required commands
+for cmd in apt-cache apt-get; do
+  command -v "$cmd" >/dev/null 2>&1 || {
+    echo "ERROR: $cmd not found in PATH";
+    exit 1
+  }
 done
 
-PKG=${1:?"please supply package name"}
+# 1) Gather root packages and their dependencies
+roots=$(printf '%s\n' "$@" | sort -u)
+deps=$(apt-cache depends --recurse \
+  --no-pre-depends --no-recommends --no-suggests \
+  --no-enhances --no-conflicts --no-breaks --no-replaces \
+  $roots \
+  | grep -E '^[a-z0-9]' \
+  | sort -u)
+all_pkgs=($(printf '%s\n%s\n' "$roots" "$deps" | sort -u))
 
-apt-get install -y -q $PKG > /dev/null 2>&1
+# 2) Batch version lookup
+policy_output=$(apt-cache policy "${all_pkgs[@]}")
+readarray -t ver_lines < <(awk '
+  /^[^ ]+:/      { pkg = substr($1,1,length($1)-1); next }
+  /Candidate:/   { print pkg "=" $2 }
+' <<<"$policy_output")
+readarray -t all_versions < <(
+  printf '%s\n' "${ver_lines[@]}" | sort -u
+)
 
-cat <(apt-cache --recurse --no-pre-depends --no-recommends --no-suggests --no-enhances --no-conflicts --no-breaks --no-replaces depends $PKG) <(echo $PKG) | grep "^[a-z]" | xargs apt-cache show | grep ^Package | sed 's/^Package: \(.*\)/dpkg -l \1 | grep ^ii | awk "{print \\$2,\\$3}"/g' | sh 2>/dev/null | sed 's/\(.*\) \(.*\)/\1=\2/' | tr '\n' ' ' | sed 's/^/RUN apt-get install -y /g'
+# 3) Append architecture to each entry
+declare -a entries
+for pv in "${all_versions[@]}"; do
+  pkg=${pv%%=*}
+  ver=${pv#*=}
+  arch=$(apt-cache show "${pkg}=${ver}" \
+    | awk '/^Architecture:/ {print $2; exit}')
+  entries+=("${pkg}:${arch}=${ver}")
+done
 
-echo ""
-
+# 4) Output based on mode
+if [ "$LIST_MODE" = true ]; then
+  # One package:arch=version per line
+  printf '%s\n' "${entries[@]}"
+else
+  # Single Dockerfile RUN command
+  printf 'RUN apt-get update && apt-get install -y'
+  for e in "${entries[@]}"; do
+    printf ' %s' "$e"
+  done
+  echo
+fi
